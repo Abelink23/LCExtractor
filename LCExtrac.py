@@ -1,6 +1,5 @@
 # Python Standard Library packages:
 import os
-import warnings
 from copy import deepcopy
 
 # Other main packages
@@ -13,7 +12,7 @@ from astropy.coordinates import SkyCoord
 
 # Gaia
 from astroquery.gaia import Gaia
-Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source" # Select Data Release 3
+Gaia.MAIN_GAIA_TABLE = "gaiaedr3.gaia_source" # Select Data Release 3
 Gaia.ROW_LIMIT = -1 # Set the number of output raw limit to infinite
 
 # Lightkurve
@@ -24,9 +23,19 @@ import lightkurve as lk
 # https://docs.lightkurve.org/tutorials/
 # https://docs.lightkurve.org/reference/api/lightkurve.KeplerTargetPixelFile.html
 
+# Define the working directory
+def working_dir(maindir=None):
+
+    if maindir is None:
+        return os.getcwd()
+    else:
+        return maindir
+
+maindir = working_dir()
+
 
 def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
-    sec=None, cutout_size=20, quarter=None, campaign=None, maindir=os.getcwd()):
+    sec=None, cutout_size=None, quarter=None, campaign=None):
 
     '''
     Function to get the lightcurve of a target source by using the lightkurve
@@ -77,9 +86,6 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
     Lightkurve object of the queried target.
     '''
 
-    warnings.filterwarnings("ignore", message="divide by zero encountered in divide")
-    warnings.filterwarnings("ignore", message="LightkurveWarning: 'cutout_size' can only be specified for TESS Full Frame Image cutouts.")
-
     ID = ID.strip()
 
     if mission == None:
@@ -114,6 +120,11 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
     print(lc)
 
     select = input('Please select which observation you want to download (#,:): ')
+
+    if method in ['simple','tpf'] and cutout_size is not None:
+        print("WARNING: Input cutout_size value is not used for 'simple/tpf' query methods and will be ignored.\n" )
+        cutout_size = None
+
     if select == ':':
         lc =  lc.download_all(cutout_size=cutout_size, download_dir=maindir)
     else:
@@ -126,7 +137,7 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
         os.mkdir(maindir+'/DATA/'+ID)
         os.mkdir(maindir+'/DATA/'+ID+'/plots/')
         os.mkdir(maindir+'/DATA/'+ID+'/lightcurve/')
-        print ("Directory tree created in %s " % (maindir+ID))
+        print ("Directory tree created in %s " % (maindir+'/DATA/'+ID))
 
     else:
         if not os.path.isdir(maindir+'/DATA/'+ID+'/plots/'):
@@ -209,27 +220,54 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
         fig_ap, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12,4))
         tpf.plot(ax=ax2, aperture_mask=mask_background, mask_color='w')
         tpf.plot(ax=ax1, aperture_mask=mask_new, mask_color='r')
+
+        _,nrows,ncols = tpf.shape
+
+        ax1.set_yticks([tpf.row+i for i in range(nrows)])
+        ax1.set_xticks([tpf.column+i for i in range(ncols)])
+        ax1.set_yticklabels([i for i in range(nrows)])
+        ax1.set_xticklabels([i for i in range(ncols)])
+
+        ax2.set_yticks([tpf.row+i for i in range(nrows)])
+        ax2.set_xticks([tpf.column+i for i in range(ncols)])
+        ax2.set_yticklabels([i for i in range(nrows)])
+        ax2.set_xticklabels([i for i in range(ncols)])
+
         ax1.set_title('Current mask')
         ax2.set_title('Background mask')
         fig_ap.tight_layout()
         #fig_ap.show()
         plt.show(block=False)
 
-        change = input('Do you want to change it? [n/y]: ')
-        if change == 'y':
-            if method == 'basic':
-                raw,col,val = input('From bottom left, use raw,column,0/1: ').split(',')
-                if val == '1':
-                    val = True
-                elif val == '0':
-                    val = False
-                mask_new[int(raw)][int(col)] = val
-            else:
-                star_cut = input('Enter new threshold value (current value is %d): ' % star_cut)
-                star_cut = float(star_cut)
-        elif change not in ['y','n']:
-            print('Not a valid input.')
-            change = 'y'
+        change = '-'
+        while change not in ['y','n']:
+            change = input('Do you want to change it? [n/y]: ')
+
+            if change == 'y':
+
+                done = False
+                while done == False:
+
+                    if method == 'basic':
+                        raw,col,val = input('From bottom left, use raw,column,0/1: ').split(',')
+                        if raw.isnumeric() and col.isnumeric() and val.isnumeric():
+                            if val == '1':
+                                val = True
+                            elif val == '0':
+                                val = False
+                            mask_new[int(raw)][int(col)] = val
+                            done = True
+                        else:
+                            done = False
+
+                    else:
+                        star_cut = input('Enter new threshold value (current value is %d): ' % star_cut)
+                        try:
+                            star_cut = float(star_cut)
+                            done = True
+                        except:
+                            print('Input threshold value is not a floar or an integer.')
+                            pass
 
     fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300)
 
@@ -283,8 +321,8 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
     dec_0 = tpf.wcs.wcs.crval[1]
     RADEC = SkyCoord(ra_0, dec_0, unit=(u.degree, u.degree), frame=tpf.wcs.wcs.radesys.lower())
 
-    width  = u.Quantity(tpf.wcs.wcs.crpix[0]*tpf.wcs.array_shape[0], u.arcsec)
-    height = u.Quantity(tpf.wcs.wcs.crpix[1]*tpf.wcs.array_shape[1], u.arcsec)
+    height = u.Quantity(tpf.wcs.wcs.crpix[0]*tpf.shape[1], u.arcsec)
+    width  = u.Quantity(tpf.wcs.wcs.crpix[1]*tpf.shape[2], u.arcsec)
 
     query = Gaia.cone_search_async(RADEC, radius=np.sqrt(width**2+height**2))
     query = query.get_results()
@@ -292,7 +330,8 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
     if len(query) == 0:
         print('Gaia query failed for object',tpf.targetid)
         return None
-    elif len(query) > 1:
+
+    elif len(query) > 1 and star_cut is not None:
         query = query[query['phot_g_mean_mag'] < star_cut]
 
     fig_ga, axg = plt.subplots(figsize=(6,4))
