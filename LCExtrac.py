@@ -1,38 +1,24 @@
 # Python Standard Library packages:
-import re
 import os
-import sys
-import time
-import platform
 import warnings
+from copy import deepcopy
 
 # Other main packages
 import numpy as np
-import progressbar as pb
+import matplotlib.pyplot as plt
 
 # Astro-packages
 import astropy.units as u
-from astropy.io import fits,ascii
-from astropy.table import Table, join, setdiff, vstack, hstack
 from astropy.coordinates import SkyCoord
-#   Vizier:
-from astroquery.vizier import Vizier # Only used to query in Gaia DR2
-#   Simbad
-from astroquery.simbad import Simbad
-Simbad.add_votable_fields('flux(B)','flux(V)','sptype')
-#   Gaia
+
+# Gaia
 from astroquery.gaia import Gaia
-Gaia.MAIN_GAIA_TABLE = "gaiaedr3.gaia_source" # Select early Data Release 3
+Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source" # Select Data Release 3
 Gaia.ROW_LIMIT = -1 # Set the number of output raw limit to infinite
-sys.path.append(os.path.expanduser('~') + '/MEGA/PhD/programs/python/edr3_zp')
-import zpt; zpt.load_tables()
 
-
-import matplotlib.pyplot as plt
-
+# Lightkurve
 import lightkurve as lk
 
-from copy import deepcopy
 
 # https://docs.lightkurve.org/
 # https://docs.lightkurve.org/tutorials/
@@ -40,7 +26,7 @@ from copy import deepcopy
 
 
 def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
-    sec=None, cutout_size=20, quarter=None, campaign=None, download_dir=tessdir):
+    sec=None, cutout_size=20, quarter=None, campaign=None, maindir=os.getcwd()):
 
     '''
     Function to get the lightcurve of a target source by using the lightkurve
@@ -129,24 +115,24 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
 
     select = input('Please select which observation you want to download (#,:): ')
     if select == ':':
-        lc =  lc.download_all(cutout_size=cutout_size, download_dir=download_dir)
+        lc =  lc.download_all(cutout_size=cutout_size, download_dir=maindir)
     else:
         lc = lc[int(select)]
-        lc = lc.download(cutout_size=cutout_size, download_dir=download_dir) # NOT FULLY WORKING, FIX
+        lc = lc.download(cutout_size=cutout_size, download_dir=maindir) # NOT FULLY WORKING, FIX
 
     lc.targetid = ID.replace(' ','')
 
-    if not os.path.isdir(tessdir+ID):
-        os.mkdir(tessdir+ID)
-        os.mkdir(tessdir+ID+'/plots/')
-        os.mkdir(tessdir+ID+'/lightcurve/')
-        print ("Directory tree created in %s " % (tessdir+ID))
+    if not os.path.isdir(maindir+'/DATA/'+ID):
+        os.mkdir(maindir+'/DATA/'+ID)
+        os.mkdir(maindir+'/DATA/'+ID+'/plots/')
+        os.mkdir(maindir+'/DATA/'+ID+'/lightcurve/')
+        print ("Directory tree created in %s " % (maindir+ID))
 
     else:
-        if not os.path.isdir(tessdir+ID+'/plots/'):
-            os.mkdir(tessdir+ID+'/plots/')
-        if not os.path.isdir(tessdir+ID+'/lightcurve/'):
-            os.mkdir(tessdir+ID+'/lightcurve/')
+        if not os.path.isdir(maindir+'/DATA/'+ID+'/plots/'):
+            os.mkdir(maindir+'/DATA/'+ID+'/plots/')
+        if not os.path.isdir(maindir+'/DATA/'+ID+'/lightcurve/'):
+            os.mkdir(maindir+'/DATA/'+ID+'/lightcurve/')
 
     return lc
 
@@ -245,7 +231,7 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
             print('Not a valid input.')
             change = 'y'
 
-    fig_ap.savefig(tessdir+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300)
+    fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300)
 
     #print('Showing final mask...')
     #tpf.plot(aperture_mask=mask_new, title='Final mask')
@@ -325,7 +311,7 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
     #fig_ga.show()
     plt.show(block=False)
 
-    fig_ga.savefig(tessdir+tpf.targetid+"/plots/"+tpf.targetid+'_Gaia.png', dpi=300)
+    fig_ga.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_Gaia.png', dpi=300)
 
     return None
 
@@ -433,7 +419,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
         npcs = input('Value of npcs is %d. Hit return to accept and continue, or type another value: ' % npcs)
 
-    fig_pca.savefig(tessdir+tpf.targetid+"/plots/"+tpf.targetid+'_pca_regressors.png', dpi=300)
+    fig_pca.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_pca_regressors.png', dpi=300)
 
     # Apply the detrending and get the detrended light curve
     rc = lk.RegressionCorrector(lc)
@@ -441,7 +427,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
     # Plot a simple diagnostic plot
     rc.diagnose()
-    plt.savefig(tessdir+tpf.targetid+"/plots/"+tpf.targetid+'_raw_light_curve.png', dpi=300)
+    plt.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_raw_light_curve.png', dpi=300)
     plt.show(block=False)
 
     lc.targetid = tpf.targetid
@@ -514,7 +500,7 @@ def sig_clip_lc(lc, sigma=6):
 
     lc.remove_outliers(sigma=sigma, return_mask=True)
 
-    fig_sig.savefig(tessdir+lc.targetid+"/plots/"+lc.targetid+'_detrended_light_curve.png', dpi=300)
+    fig_sig.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_detrended_light_curve.png', dpi=300)
 
     return lc
 
@@ -564,7 +550,7 @@ def export_lc(lc, output_path='default', append=''):
 
     output_path : str, optional
         Path where the lightcurve will be saved.
-        Default is tessdir/ID/lightcurve/
+        Default is maindir/ID/lightcurve/
 
     append : str, optional
         Append suffix after the ID and before the extensio. Default is ''.
@@ -600,7 +586,7 @@ def export_lc(lc, output_path='default', append=''):
     master_flux = master_flux - np.median(master_flux)
 
     if output_path in ['def','default']:
-        output_path = tessdir+lc.targetid+'/lightcurve/'
+        output_path = maindir+'/DATA/'+lc.targetid+'/lightcurve/'
 
     np.savetxt(output_path+lc.targetid+append+'.txt', np.array([master_time, master_flux]).T,
         header='time, magnitude', fmt='%.10f', delimiter=', ', comments='')
