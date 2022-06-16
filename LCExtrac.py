@@ -1,4 +1,32 @@
-from db import *
+# Python Standard Library packages:
+import re
+import os
+import sys
+import time
+import platform
+import warnings
+
+# Other main packages
+import numpy as np
+import progressbar as pb
+
+# Astro-packages
+import astropy.units as u
+from astropy.io import fits,ascii
+from astropy.table import Table, join, setdiff, vstack, hstack
+from astropy.coordinates import SkyCoord
+#   Vizier:
+from astroquery.vizier import Vizier # Only used to query in Gaia DR2
+#   Simbad
+from astroquery.simbad import Simbad
+Simbad.add_votable_fields('flux(B)','flux(V)','sptype')
+#   Gaia
+from astroquery.gaia import Gaia
+Gaia.MAIN_GAIA_TABLE = "gaiaedr3.gaia_source" # Select early Data Release 3
+Gaia.ROW_LIMIT = -1 # Set the number of output raw limit to infinite
+sys.path.append(os.path.expanduser('~') + '/MEGA/PhD/programs/python/edr3_zp')
+import zpt; zpt.load_tables()
+
 
 import matplotlib.pyplot as plt
 
