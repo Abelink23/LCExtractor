@@ -5,6 +5,8 @@ from copy import deepcopy
 # Other main packages
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib import patches
+
 
 # Astro-packages
 import astropy.units as u
@@ -190,7 +192,7 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
 
     if ini_mask in ['pipeline','pipe']:
         mask_new = tpf.pipeline_mask
-    elif ini_mask == 'new':
+    elif ini_mask in ['new','mask_new']:
         mask_new = tpf.mask_new
     elif type(ini_mask) == np.ndarray:
         mask_new = ini_mask
@@ -269,7 +271,7 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
                             print('Input threshold value is not a floar or an integer.')
                             pass
 
-    fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300)
+    fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300, bbox_inches='tight')
 
     #print('Showing final mask...')
     #tpf.plot(aperture_mask=mask_new, title='Final mask')
@@ -280,10 +282,11 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
     return tpf
 
 
-def contaminants(tpf, mask='pipeline', star_cut=12):
+def contaminants(tpf, mask='pipeline', star_cut=None, dist_cont=100):
 
     '''
-    Function to visually locate potential contaminants from Gaia EDR3.
+    Function to visually locate potential contaminants from Gaia EDR3 and export the
+    closest ones (see dist_cont) to an output txt file.
 
     Parameters
     ----------
@@ -300,6 +303,9 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
         Gaia G magnitude cut used to limit the contaminants.
         Default is 12.
 
+    dist_cont : int/float, optional
+        Maximum distance of the contaminant sources to be exported to a txt file.
+
     Returns
     -------
     Nothing but the plot of the contamminant is created.
@@ -312,7 +318,7 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
 
     if mask in ['pipeline','pipe']:
         mask = tpf.pipeline_mask
-    elif mask == 'new':
+    elif mask in ['new','mask_new']:
         mask = tpf.mask_new
     else:
         mask = None
@@ -328,29 +334,54 @@ def contaminants(tpf, mask='pipeline', star_cut=12):
     query = query.get_results()
 
     if len(query) == 0:
-        print('Gaia query failed for object',tpf.targetid)
+        print('Gaia query failed for object', tpf.targetid)
         return None
 
-    elif len(query) > 1 and star_cut is not None:
-        query = query[query['phot_g_mean_mag'] < star_cut]
+    elif len(query) > 1:
+
+        if star_cut is not None:
+            query = query[query['phot_g_mean_mag'] < star_cut]
+            if len(query) == 0:
+                print('Gaia query has no objects for the selected magnitude cut.')
+                return None
+
+        else:
+            if len(query) > 50:
+                query.sort('phot_g_mean_mag')
+                query = query[:50]
+                print('Query returned more than 50 sources, getting the brightest ones.')
+                star_cut = query[-1]['phot_g_mean_mag']
 
     fig_ga, axg = plt.subplots(figsize=(6,4))
-    tpf.plot(ax=axg, aperture_mask=mask, mask_color='r')
+    tpf.plot(ax=axg)
+
+    if mask is not None:
+        [axg.add_patch(patches.Rectangle((j-.5+tpf.column, i-.5+tpf.row), 1, 1, color='r', alpha=.4)) \
+            for i in range(mask.shape[0]) for j in range(mask.shape[1]) if mask[i, j]]
+
     axg.set_ylim(axg.get_ylim())
     axg.set_xlim(axg.get_xlim())
 
+    s_fac = np.exp(query['phot_g_mean_mag'].min())*500
+
     for star in query:
         ra_pix,dec_pix=tpf.wcs.world_to_pixel_values(star['ra'],star['dec'])
-        axg.scatter(tpf.column+ra_pix, tpf.row+dec_pix, s=1e6/np.exp(star['phot_g_mean_mag']),
-            fc='orange', ec='k', alpha=0.6, lw=.5)
-        axg.text(tpf.column+ra_pix+.2, tpf.row+dec_pix+.2, round(star['phot_g_mean_mag'],2), fontsize=6)
 
-    axg.set_title('Gaia sources with Gmag < %d' % star_cut)
+        axg.scatter(tpf.column+ra_pix, tpf.row+dec_pix, s=s_fac/np.exp(star['phot_g_mean_mag']),
+            fc='orange', ec='k', alpha=0.8, lw=.5, zorder=1)
+        axg.text(tpf.column+ra_pix+.2, tpf.row+dec_pix+.2, round(star['phot_g_mean_mag'],1),
+            fontsize=7, c='w', zorder=2).set_clip_on(True)
+
+    axg.set_title('Gaia sources with Gmag < %.1f' % star_cut)
     fig_ga.tight_layout()
     #fig_ga.show()
     plt.show(block=False)
 
-    fig_ga.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_Gaia.png', dpi=300)
+    fig_ga.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_Gaia.png', dpi=300, bbox_inches='tight')
+
+    query['dist'] = query['dist']*3600
+    query = query[query['dist'] < dist_cont]['source_id','ra','dec','pm','pmra','pmdec','ruwe','phot_g_mean_mag','dist']
+    query.write(maindir+'/DATA/'+tpf.targetid+'/contaminants.txt', format='ascii.fixed_width_two_line', overwrite=True)
 
     return None
 
@@ -386,7 +417,7 @@ def tpf_to_lc(tpf, mask='pipeline', flux_err_cut=0):
 
     if mask == 'pipeline':
         mask = tpf.pipeline_mask
-    elif mask == 'new':
+    elif mask in ['new','mask_new']:
         mask = tpf.mask_new
 
     lc_raw = tpf.to_lightcurve(aperture_mask=mask)
@@ -458,7 +489,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
         npcs = input('Value of npcs is %d. Hit return to accept and continue, or type another value: ' % npcs)
 
-    fig_pca.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_pca_regressors.png', dpi=300)
+    fig_pca.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_pca_regressors.png', dpi=300, bbox_inches='tight')
 
     # Apply the detrending and get the detrended light curve
     rc = lk.RegressionCorrector(lc)
@@ -466,7 +497,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
     # Plot a simple diagnostic plot
     rc.diagnose()
-    plt.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_raw_light_curve.png', dpi=300)
+    plt.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_raw_light_curve.png', dpi=300, bbox_inches='tight')
     plt.show(block=False)
 
     lc.targetid = tpf.targetid
@@ -539,7 +570,7 @@ def sig_clip_lc(lc, sigma=6):
 
     lc.remove_outliers(sigma=sigma, return_mask=True)
 
-    fig_sig.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_detrended_light_curve.png', dpi=300)
+    fig_sig.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_detrended_light_curve.png', dpi=300, bbox_inches='tight')
 
     return lc
 
