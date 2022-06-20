@@ -1,5 +1,6 @@
 .DS_Store
 .gitignore
+.ipynb_checkpoints/
 
 matplotlibrc
 
@@ -8,6 +9,4 @@ DATA/**
 mastDownload/
 tesscut/
 
-tmp*.py
-*_bkp.py
 Lightcurves*
