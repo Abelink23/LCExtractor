@@ -435,6 +435,8 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
     '''
     Function to perform the detrending by PCA given an input lightcurve.
+    See:
+    https://colab.research.google.com/github/lightkurve/lightkurve/blob/main/docs/source/tutorials/2-creating-light-curves/2-3-removing-scattered-light-using-regressioncorrector.ipynb
 
     Parameters
     ----------
@@ -701,6 +703,10 @@ def lc_to_perid(lc, oversample_factor=1, output_path='default'):
     ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
     ax_pg.set_ylabel('Amp. (mmag)')
     ax_pg.plot(pg.frequency, pg.magnitude, lw=.5)
+
+    fig_pg.tight_layout()
+    #fig_pg.show()
+    plt.show(block=False)
 
     fig_pg.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_peridiogram.png', dpi=300, bbox_inches='tight')
 
