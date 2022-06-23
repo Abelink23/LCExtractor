@@ -6,7 +6,10 @@ from copy import deepcopy
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import patches
-
+from matplotlib.ticker import AutoMinorLocator
+plt.rc('xtick', direction='in', top='on')
+#plt.rc('xtick.minor', visible=True)
+plt.rc('ytick', direction='in', right='on')
 
 # Astro-packages
 import astropy.units as u
@@ -180,6 +183,12 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
         If 'threshold' method is selected, input cut value to select the background.
         Default is 0.01.
 
+    ref_pixel : (int,int) tuple/'center'/None
+        (col,row) pixel coordinate closest to the desired region. For example, use
+        `reference_pixel=(0,0)` to select the region closest to the bottom left corner
+        of the target pixel file. If 'center' (default) then the region closest to the
+        center pixel will be selected. If `None` then all regions will be selected.
+
     Returns
     -------
     New mask for the tpf.
@@ -282,7 +291,7 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
     return tpf
 
 
-def contaminants(tpf, mask='pipeline', star_cut=None, dist_cont=100):
+def contaminants(tpf, mask='pipeline', dmag=5, dist_cont=100):
 
     '''
     Function to visually locate potential contaminants from Gaia EDR3 and export the
@@ -299,9 +308,9 @@ def contaminants(tpf, mask='pipeline', star_cut=None, dist_cont=100):
         - 'new' takes the tpf.mask_new if created before.
         - None if no mask is used (default).
 
-    star_cut : int/float, optional
-        Gaia G magnitude cut used to limit the contaminants.
-        Default is 12.
+    dmag : int/float, optional
+        Gaia G magnitude magnitude difference used to limit the contaminants.
+        Default is 5.
 
     dist_cont : int/float, optional
         Maximum distance of the contaminant sources to be exported to a txt file.
@@ -337,20 +346,15 @@ def contaminants(tpf, mask='pipeline', star_cut=None, dist_cont=100):
         print('Gaia query failed for object', tpf.targetid)
         return None
 
-    elif len(query) > 1:
+    dmin = query['phot_g_mean_mag'].min() + dmag
+    query = query[query['phot_g_mean_mag'] <= dmin]
 
-        if star_cut is not None:
-            query = query[query['phot_g_mean_mag'] < star_cut]
-            if len(query) == 0:
-                print('Gaia query has no objects for the selected magnitude cut.')
-                return None
-
-        else:
-            if len(query) > 50:
-                query.sort('phot_g_mean_mag')
-                query = query[:50]
-                print('Query returned more than 50 sources, getting the brightest ones.')
-                star_cut = query[-1]['phot_g_mean_mag']
+    nlim = 40
+    if len(query) > nlim:
+        query.sort('phot_g_mean_mag')
+        query = query[:nlim]
+        print('Query returned more than %i sources, getting the brightest ones.' % nlim)
+        star_cut = query[-1]['phot_g_mean_mag']
 
     fig_ga, axg = plt.subplots(figsize=(6,4))
     tpf.plot(ax=axg)
@@ -372,7 +376,7 @@ def contaminants(tpf, mask='pipeline', star_cut=None, dist_cont=100):
         axg.text(tpf.column+ra_pix+.2, tpf.row+dec_pix+.2, round(star['phot_g_mean_mag'],1),
             fontsize=7, c='w', zorder=2).set_clip_on(True)
 
-    axg.set_title('Gaia sources with Gmag < %.1f' % star_cut)
+    axg.set_title('Gaia sources with Gmag < %.1f' % dmin)
     fig_ga.tight_layout()
     #fig_ga.show()
     plt.show(block=False)
@@ -402,7 +406,7 @@ def tpf_to_lc(tpf, mask='pipeline', flux_err_cut=0):
         - 'new' takes the tpf.mask_new if created before.
         - Manual input array of values for the initial mask.
 
-    flux_err_cut : int/float, optional
+    flux_err_cut : int/float, optional [NOT IN USE]
         Threshold value for the flux error to remove bad data. Default is 0.
 
     Returns
@@ -421,7 +425,7 @@ def tpf_to_lc(tpf, mask='pipeline', flux_err_cut=0):
         mask = tpf.mask_new
 
     lc_raw = tpf.to_lightcurve(aperture_mask=mask)
-    lc_raw = lc_raw[lc_raw.flux_err > flux_err_cut]
+    #lc_raw = lc_raw[lc_raw.flux_err > flux_err_cut] # Need to keep the np.nan for detrending
     lc_raw.targetid = tpf.targetid
 
     return lc_raw
@@ -441,7 +445,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
         The input target pixel file from either TESS or Kepler.
 
     mask_background : np.ndarray
-        Mask used to consider the background. Usually tpf.background_mask.
+        Mask used to consider the background. Usually tpf.mask_background.
 
     npcs : int, optional
         Define the initial number of principal components to inspect. Default is 20.
@@ -461,8 +465,10 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
         print('Input tpf is not recognised as such. Exiting...\n')
         return None
 
+    mask_nan = [True if not np.isnan(i) else False for i in lc.flux]
+
     # Define Regressors to perform PCA and remove systematics
-    regressors = tpf.flux[:][:,mask_background]
+    regressors = tpf.flux[mask_nan][:][:,mask_background]
 
     while npcs != '':
         try:
@@ -479,7 +485,7 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
 
         # Plot first npcs components to inspect
         fig_pca, ax = plt.subplots(nrows=1, ncols=1, figsize=(8,6))
-        ax.plot(tpf.time.value, dm.values[:,:-1] + np.arange(npcs)*0.2, '.', color='k', ms=2)
+        ax.plot(tpf[mask_nan].time.value, dm.values[:,:-1] + np.arange(npcs)*0.2, '.', color='k', ms=2)
         ax.axes.get_yaxis().set_visible(False)
         ax.set_title('The first principal component is at the bottom')
 
@@ -492,7 +498,8 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
     fig_pca.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_pca_regressors.png', dpi=300, bbox_inches='tight')
 
     # Apply the detrending and get the detrended light curve
-    rc = lk.RegressionCorrector(lc)
+
+    rc = lk.RegressionCorrector(lc.remove_nans())
     lc = rc.correct(dm)
 
     # Plot a simple diagnostic plot
@@ -575,7 +582,7 @@ def sig_clip_lc(lc, sigma=6):
     return lc
 
 
-def get_mag(lc):
+def get_mag_lc(lc):
 
     '''
     Function to calculate the magnitude from the flux and add it to the
@@ -602,7 +609,7 @@ def get_mag(lc):
         flux = lc.flux.value
 
     mag = -2.5 * np.log10(flux)
-    mag -= np.mean(mag)
+    mag -= np.median(mag)
     lc.magnitude = mag
 
     return lc
@@ -638,7 +645,7 @@ def export_lc(lc, output_path='default', append=''):
     if hasattr(lc, 'magnitude'):
         master_flux = lc.magnitude
     else:
-        lc = get_mag(lc)
+        lc = get_mag_lc(lc)
         master_flux = lc.magnitude
 
     master_time = lc.time.value
@@ -660,5 +667,79 @@ def export_lc(lc, output_path='default', append=''):
 
     np.savetxt(output_path+lc.targetid+append+'.txt', np.array([master_time, master_flux]).T,
         header='time, magnitude', fmt='%.10f', delimiter=', ', comments='')
+
+    return None
+
+
+def lc_to_perid(lc, oversample_factor=1, output_path='default'):
+
+    '''
+    Function to obtain the preidiogram and associated plots for a given lightcurve.
+
+    Parameters
+    ----------
+    lc : lk.lightcurve
+        The input lightcurve object from either TESS or Kepler.
+
+    Returns
+    -------
+    The peridiogram object is returned.
+    '''
+
+    if not (type(lc) == lk.lightcurve.KeplerLightCurve \
+        or  type(lc) == lk.lightcurve.TessLightCurve):
+        print('Input lightcurve is not recognised as such. Exiting...\n')
+        return None
+
+    pg = lc.to_periodogram(method='lombscargle', oversample_factor=oversample_factor)
+    pg.targetid = lc.targetid
+
+    pg.magnitude = 1e6*((pg.power - np.median(pg.power)) / np.median(pg.power))
+
+    fig_pg, ax_pg = plt.subplots(figsize=(5,2))
+    ax_pg.set_title('Peridiogram')
+    ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
+    ax_pg.set_ylabel('Amp. (mmag)')
+    ax_pg.plot(pg.frequency, pg.magnitude, lw=.5)
+
+    fig_pg.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_peridiogram.png', dpi=300, bbox_inches='tight')
+
+    return pg
+
+
+def export_pg(pg, output_path='default', append=''):
+
+    '''
+    Function to export the peridiogram from a peridiogram object.
+
+    Parameters
+    ----------
+    pg : lk.periodogram.LombScarglePeriodogram
+        The input peridiogram object from either TESS or Kepler.
+
+    output_path : str, optional
+        Path where the peridiogram will be saved.
+        Default is maindir/ID/lightcurve/
+
+    append : str, optional
+        Append suffix after the ID and before the extensio. Default is ''.
+
+    Returns
+    -------
+    Nothing but the lightcurve is exported.
+    '''
+
+    if not type(pg) == lk.periodogram.LombScarglePeriodogram:
+        print('Input peridiogram is not recognised as such. Exiting...\n')
+        return None
+
+    if not hasattr(pg, 'magnitude'):
+        pg.magnitude = 1e6*((pg.power - np.median(pg.power)) / np.median(pg.power))
+
+    if output_path in ['def','default']:
+        output_path = maindir+'/DATA/'+pg.targetid+'/lightcurve/'
+
+    np.savetxt(output_path+pg.targetid+'_pg_'+append+'.txt', np.array([pg.frequency, pg.magnitude]).T,
+        header='frequency, magnitude', fmt='%.10f', delimiter=', ', comments='')
 
     return None
