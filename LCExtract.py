@@ -3,7 +3,11 @@ import os
 from copy import deepcopy
 
 # Other main packages
+import random
 import numpy as np
+from scipy.signal import find_peaks
+from scipy.stats import sigmaclip
+
 import matplotlib.pyplot as plt
 from matplotlib import patches
 from matplotlib.ticker import AutoMinorLocator
@@ -17,7 +21,7 @@ from astropy.coordinates import SkyCoord
 
 # Gaia
 from astroquery.gaia import Gaia
-Gaia.MAIN_GAIA_TABLE = "gaiaedr3.gaia_source" # Select Data Release 3
+Gaia.MAIN_GAIA_TABLE = "gaiadr3.gaia_source" # Select Data Release 3
 Gaia.ROW_LIMIT = -1 # Set the number of output raw limit to infinite
 
 # Lightkurve
@@ -141,20 +145,17 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
     if not os.path.isdir(maindir+'/DATA/'+ID):
         os.mkdir(maindir+'/DATA/'+ID)
         os.mkdir(maindir+'/DATA/'+ID+'/plots/')
-        os.mkdir(maindir+'/DATA/'+ID+'/lightcurve/')
         print ("Directory tree created in %s " % (maindir+'/DATA/'+ID))
 
     else:
         if not os.path.isdir(maindir+'/DATA/'+ID+'/plots/'):
             os.mkdir(maindir+'/DATA/'+ID+'/plots/')
-        if not os.path.isdir(maindir+'/DATA/'+ID+'/lightcurve/'):
-            os.mkdir(maindir+'/DATA/'+ID+'/lightcurve/')
 
     return lc
 
 
-def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sky_cut=0.01,
-    ref_pixel='center'):
+def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sat_cut=200,
+    sky_cut=0.01, ref_pixel='center'):
 
     '''
     Function to visually change the tpf mask.
@@ -178,6 +179,11 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
     star_cut : int/float, optional
         If 'threshold' method is selected, input cut value to select the star.
         Default is 8.
+
+    sat_cut : int/float, optional
+        If 'threshold' method is selected, input cut value to remove pixels that are
+        saturated respect to the ref_pixel.
+        Default is 200.
 
     sky_cut : int/float, optional
         If 'threshold' method is selected, input cut value to select the background.
@@ -209,6 +215,9 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
         print('Input ini_mask is not valid. Exiting...\n')
         return None
 
+    idx = int(len(tpf)/3)
+    print('Plots will display frame %i/%i' % (idx,len(tpf)))
+
     change = 'y'
     while change == 'y':
 
@@ -223,14 +232,16 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
         elif method == 'threshold':
             # Aperture mask defined by a threshold method using a sigma-above-background
             # value, assuming the star is located in the center (should be).
-            mask_new = tpf.create_threshold_mask(threshold=star_cut, reference_pixel=ref_pixel)
+            mask_new = tpf[idx].create_threshold_mask(threshold=star_cut, reference_pixel=ref_pixel)
+            mask_sat = tpf[idx].create_threshold_mask(threshold=sat_cut, reference_pixel=ref_pixel)
+            mask_new = np.logical_and(mask_new, ~mask_sat)
 
         # Define "sky" background mask (assuming threshold = 0.01)
-        mask_background = ~tpf.create_threshold_mask(threshold=sky_cut, reference_pixel=None)
+        mask_background = ~tpf[idx].create_threshold_mask(threshold=sky_cut, reference_pixel=None)
 
-        fig_ap, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, figsize=(12,4))
-        tpf.plot(ax=ax2, aperture_mask=mask_background, mask_color='w')
-        tpf.plot(ax=ax1, aperture_mask=mask_new, mask_color='r')
+        fig_ap, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, figsize=(10,4))
+        tpf[idx].plot(ax=ax2, aperture_mask=mask_background, mask_color='w')
+        tpf[idx].plot(ax=ax1, aperture_mask=mask_new, mask_color='r')
 
         _,nrows,ncols = tpf.shape
 
@@ -247,12 +258,11 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
         ax1.set_title('Current mask')
         ax2.set_title('Background mask')
         fig_ap.tight_layout()
-        #fig_ap.show()
-        plt.show(block=False)
+        fig_ap.show()
 
         change = '-'
         while change not in ['y','n']:
-            change = input('Do you want to change it? [n/y]: ')
+            change = input('Do you want to change the star cut? [n/y]: ')
 
             if change == 'y':
 
@@ -281,9 +291,7 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sk
                             pass
 
     fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300, bbox_inches='tight')
-
-    #print('Showing final mask...')
-    #tpf.plot(aperture_mask=mask_new, title='Final mask')
+    plt.close(fig_ap)
 
     tpf.mask_new = mask_new
     tpf.mask_background = mask_background
@@ -356,8 +364,11 @@ def contaminants(tpf, mask='pipeline', dmag=5, dist_cont=100):
         print('Query returned more than %i sources, getting the brightest ones.' % nlim)
         star_cut = query[-1]['phot_g_mean_mag']
 
+    idx = int(len(tpf)/3)
+    print('Plots will display frame %i/%i' % (idx,len(tpf)))
+
     fig_ga, axg = plt.subplots(figsize=(6,4))
-    tpf.plot(ax=axg)
+    tpf[idx].plot(ax=axg)
 
     if mask is not None:
         [axg.add_patch(patches.Rectangle((j-.5+tpf.column, i-.5+tpf.row), 1, 1, color='r', alpha=.4)) \
@@ -378,8 +389,8 @@ def contaminants(tpf, mask='pipeline', dmag=5, dist_cont=100):
 
     axg.set_title('Gaia sources with Gmag < %.1f' % dmin)
     fig_ga.tight_layout()
-    #fig_ga.show()
-    plt.show(block=False)
+
+    fig_ga.show()
 
     fig_ga.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_Gaia.png', dpi=300, bbox_inches='tight')
 
@@ -492,21 +503,20 @@ def detrended_tpf_to_lc(lc, tpf, mask_background, npcs=20):
         ax.set_title('The first principal component is at the bottom')
 
         fig_pca.tight_layout()
-        #fig_pca.show()
-        plt.show(block=False)
+        fig_pca.show()
 
         npcs = input('Value of npcs is %d. Hit return to accept and continue, or type another value: ' % npcs)
 
     fig_pca.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_pca_regressors.png', dpi=300, bbox_inches='tight')
+    plt.close(fig_pca)
 
     # Apply the detrending and get the detrended light curve
-
     rc = lk.RegressionCorrector(lc.remove_nans())
     lc = rc.correct(dm)
 
     # Plot a simple diagnostic plot
     rc.diagnose()
-    plt.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_raw_light_curve.png', dpi=300, bbox_inches='tight')
+    plt.savefig(maindir+'/DATA/'+tpf.targetid+'/plots/'+tpf.targetid+'_detrended_light_curve.png', dpi=300, bbox_inches='tight')
     plt.show(block=False)
 
     lc.targetid = tpf.targetid
@@ -537,10 +547,10 @@ def sig_clip_lc(lc, sigma=6):
         print('Input lightcurve is not recognised as such. Exiting...\n')
         return None
 
-    tmp_lc = deepcopy(lc)
-
     change = 'y'
     while change == 'y':
+
+        tmp_lc = deepcopy(lc)
 
         if 'fig_sig' in locals():
             plt.close(fig_sig)
@@ -565,8 +575,7 @@ def sig_clip_lc(lc, sigma=6):
 
         fig_sig.tight_layout()
         fig_sig.subplots_adjust(hspace=0.5)
-        #fig_sig.show()
-        plt.show(block=False)
+        fig_sig.show()
 
         change = input('Do you want to change this value? [n/y]: ')
         if change == 'y':
@@ -579,7 +588,10 @@ def sig_clip_lc(lc, sigma=6):
 
     lc.remove_outliers(sigma=sigma, return_mask=True)
 
-    fig_sig.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_detrended_light_curve.png', dpi=300, bbox_inches='tight')
+    lc = lc.remove_nans()
+
+    fig_sig.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_outliers_removed.png', dpi=300, bbox_inches='tight')
+    plt.close(fig_sig)
 
     return lc
 
@@ -617,7 +629,7 @@ def get_mag_lc(lc):
     return lc
 
 
-def export_lc(lc, output_path='default', append=''):
+def export_lc(lc, output_path='default', append='_lc'):
 
     '''
     Function to export the lightcurve from a lightkurve object.
@@ -629,10 +641,10 @@ def export_lc(lc, output_path='default', append=''):
 
     output_path : str, optional
         Path where the lightcurve will be saved.
-        Default is maindir/ID/lightcurve/
+        Default is maindir/ID/
 
     append : str, optional
-        Append suffix after the ID and before the extensio. Default is ''.
+        Append suffix after the ID and before the extensio. Default is '_lc'.
 
     Returns
     -------
@@ -665,15 +677,27 @@ def export_lc(lc, output_path='default', append=''):
     master_flux = master_flux - np.median(master_flux)
 
     if output_path in ['def','default']:
-        output_path = maindir+'/DATA/'+lc.targetid+'/lightcurve/'
+        output_path = maindir+'/DATA/'+lc.targetid+'/'
 
     np.savetxt(output_path+lc.targetid+append+'.txt', np.array([master_time, master_flux]).T,
-        header='time, magnitude', fmt='%.10f', delimiter=', ', comments='')
+        header='time, magnitude', fmt='%.5f', delimiter=', ', comments='')
+
+    fig_lc, ax_lc = plt.subplots(figsize=(10,3))
+    ax_lc.plot(lc.time.value, 1000*-lc.magnitude, lw=0.5)
+
+    ax_lc.set_title('Light curve')
+    ax_lc.set_xlabel('BJD - 2457000.0')
+    ax_lc.set_ylabel(r'$\Delta$Tp (mmag)')
+
+    fig_lc.tight_layout()
+    fig_lc.show()
+
+    fig_lc.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_final_LC.png', dpi=300, bbox_inches='tight')
 
     return None
 
 
-def lc_to_perid(lc, oversample_factor=1, output_path='default'):
+def lc_to_perid(lc, y_axis='power', oversample_factor=5, dcut=0.2, norm=False, tmp=1e-1):
 
     '''
     Function to obtain the preidiogram and associated plots for a given lightcurve.
@@ -683,9 +707,21 @@ def lc_to_perid(lc, oversample_factor=1, output_path='default'):
     lc : lk.lightcurve
         The input lightcurve object from either TESS or Kepler.
 
+    y_axis : str, optional
+    Choose between 'power'/'mag' for the plot showing the periodogram. Default is 'power'.
+
+    oversample_factor : int, optional
+        See lk.to_periodogram for more information.
+
+    dcut : int/float, optional
+        Distance from the highest amplitude peak to show other peaks. Default is 0.2.
+
+    norm : boolean, optional
+        Set to True if you want the magnitude to be normalized.
+
     Returns
     -------
-    The peridiogram object is returned.
+    The periodograms object is returned.
     '''
 
     if not (type(lc) == lk.lightcurve.KeplerLightCurve \
@@ -693,42 +729,128 @@ def lc_to_perid(lc, oversample_factor=1, output_path='default'):
         print('Input lightcurve is not recognised as such. Exiting...\n')
         return None
 
+    if not dcut >0 and dcut<1:
+        print('Input dcut value should be between 0 and 1. Exiting...\n')
+        return None
+
     pg = lc.to_periodogram(method='lombscargle', oversample_factor=oversample_factor)
     pg.targetid = lc.targetid
 
-    pg.magnitude = 1e6*((pg.power - np.median(pg.power)) / np.median(pg.power))
+    pg.magnitude = (tmp*(pg.power - np.median(pg.power)) / np.median(pg.power)).value
+    pg.mag_max = pg.magnitude.max()
 
-    fig_pg, ax_pg = plt.subplots(figsize=(5,2))
-    ax_pg.set_title('Peridiogram')
-    ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
-    ax_pg.set_ylabel('Amp. (mmag)')
-    ax_pg.plot(pg.frequency, pg.magnitude, lw=.5)
+    # Normalization of the magnitude
+    if norm == True:
+        pg.magnitude = pg.magnitude / pg.mag_max
 
-    fig_pg.tight_layout()
-    #fig_pg.show()
-    plt.show(block=False)
+    # Analisis of the peaks:
+    change = 'y'
+    while change == 'y':
 
-    fig_pg.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_peridiogram.png', dpi=300, bbox_inches='tight')
+        if 'fig_pg' in locals():
+            plt.close(fig_pg)
+
+        fig_pg, ax_pg = plt.subplots(figsize=(7,3.5))
+        ax_pg.xaxis.set_minor_locator(AutoMinorLocator())
+
+        if y_axis == 'power':
+            max_val = pg.power.value.max()
+
+            peaks_index, properties = find_peaks(pg.power, height=dcut*max_val)
+
+            pg.plot(ax=ax_pg, view='frequency', scale='linear', xlabel=r'Freq. [d$^{-1}$]')
+            if ax_pg.get_legend() is not None:
+                ax_pg.get_legend().remove()
+
+            pg.cuts_freq,pg.cut_yaxis = [pg.frequency[i].value for i in peaks_index],[pg.power[i].value for i in peaks_index]
+
+            ax_pg.scatter(pg.cuts_freq, [i+max_val*0.02 for i in pg.cut_yaxis], s=10, marker='v', c='orange')
+
+        elif y_axis == 'mag':
+
+            max_val = pg.magnitude.max()
+
+            peaks_index, properties = find_peaks(pg.magnitude, height=dcut*max_val)
+
+            ax_pg.plot(pg.frequency, pg.magnitude, lw=0.5)
+            ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
+            if norm == True:
+                ax_pg.set_ylabel('Normalized amp.')
+            elif norm == False:
+                ax_pg.set_ylabel('Amp. (mmag)')
+
+            pg.cuts_freq,pg.cut_yaxis = [pg.frequency[i].value for i in peaks_index],[pg.magnitude[i] for i in peaks_index]
+
+            ax_pg.scatter(pg.cuts_freq, [i+max_val*0.02 for i in pg.cut_yaxis], s=10, marker='v', c='orange')
+
+        ax_pg.axhline(dcut*max_val, color='r', lw=0.4, linestyle = '--', alpha=0.5)
+
+        if y_axis == 'power' and any(pg.power.value[pg.frequency.value>15]>0.1*max_val):
+            ax_pg.set_xlim(-0.1,)
+        elif y_axis == 'mag' and any(pg.magnitude[pg.frequency.value>15]>0.1*max_val):
+            ax_pg.set_xlim(-0.1,)
+        else:
+            ax_pg.set_xlim(-0.1,15)
+
+        ax_pg.set_ylim(-0.05,)
+
+        ax_pg_top = ax_pg.twiny()
+        ax_pg_top.xaxis.set_minor_locator(AutoMinorLocator())
+        ax_pg_top.set_xlim(ax_pg.get_xlim())
+        ax_pg_top.set_xticks(ax_pg.get_xticks()[1:-1])
+        ax_pg_top.set_xticklabels(['-']+[round(np.log10(i),1) for i in ax_pg.get_xticks()[2:-1]])
+        ax_pg_top.set_xlabel(r'log Period [d]')
+
+        fig_pg.tight_layout()
+
+        # Secondary plot with zoom at lower frequencies
+        ax_pgzoom = fig_pg.add_axes([0.45, 0.4, 0.5, 0.37]) # l, b, w, h
+        if y_axis == 'power':
+            ax_pgzoom.plot(pg.frequency, pg.power, lw=.5)
+        elif y_axis == 'mag':
+            ax_pgzoom.plot(pg.frequency, pg.magnitude, lw=.5)
+
+        ax_pgzoom.set_xlim(-0.1,5)
+        ax_pgzoom.set_ylim(-0.05,)
+
+        ax_pg_top = ax_pgzoom.twiny()
+        ax_pg_top.set_xlim(ax_pgzoom.get_xlim())
+        ax_pg_top.set_xticks(ax_pgzoom.get_xticks()[1:])
+        ax_pg_top.set_xticklabels(['-']+[round(np.log10(i),1) for i in ax_pgzoom.get_xticks()[2:]])
+
+        fig_pg.show()
+
+        change = input('Do you want to change the dcut value? [n/y]: ')
+        if change == 'y':
+            dcut = input('Enter new dcut value (current value is %f): ' % dcut)
+            dcut = float(dcut)
+
+        elif change not in ['y','n']:
+            print('Not a valid input.')
+            change = 'y'
+
+    fig_pg.savefig(maindir+'/DATA/'+lc.targetid+'/plots/'+lc.targetid+'_periodogram_%s.png' % y_axis, dpi=300, bbox_inches='tight')
+    plt.close(fig_pg)
 
     return pg
 
 
-def export_pg(pg, output_path='default', append=''):
+def export_pg(pg, output_path='default', append='_pg'):
 
     '''
-    Function to export the peridiogram from a peridiogram object.
+    Function to export the periodogram from a periodogram object.
 
     Parameters
     ----------
     pg : lk.periodogram.LombScarglePeriodogram
-        The input peridiogram object from either TESS or Kepler.
+        The input periodogram object from either TESS or Kepler.
 
     output_path : str, optional
-        Path where the peridiogram will be saved.
-        Default is maindir/ID/lightcurve/
+        Path where the periodogram will be saved.
+        Default is maindir/ID/
 
     append : str, optional
-        Append suffix after the ID and before the extensio. Default is ''.
+        Append suffix after the ID and before the extensio. Default is '_pg'.
 
     Returns
     -------
@@ -736,16 +858,204 @@ def export_pg(pg, output_path='default', append=''):
     '''
 
     if not type(pg) == lk.periodogram.LombScarglePeriodogram:
-        print('Input peridiogram is not recognised as such. Exiting...\n')
+        print('Input periodogram is not recognised as such. Exiting...\n')
         return None
 
     if not hasattr(pg, 'magnitude'):
-        pg.magnitude = 1e6*((pg.power - np.median(pg.power)) / np.median(pg.power))
+        print('Periodogram does not include magnitude and will be calculated now.\n')
+        pg.magnitude = 1e-1*((pg.power - np.median(pg.power)) / np.median(pg.power)).value
+
+    elif hasattr(pg, 'mag_max') and pg.magnitude.max() == 1.0:
+        pg.magnitude = pg.magnitude * pg.mag_max
 
     if output_path in ['def','default']:
-        output_path = maindir+'/DATA/'+pg.targetid+'/lightcurve/'
+        output_path = maindir+'/DATA/'+pg.targetid+'/'
 
-    np.savetxt(output_path+pg.targetid+'_pg_'+append+'.txt', np.array([pg.frequency, pg.magnitude]).T,
-        header='frequency, magnitude', fmt='%.10f', delimiter=', ', comments='')
+    np.savetxt(output_path+pg.targetid+append+'.txt', np.array([pg.frequency, pg.magnitude, pg.power]).T,
+        header='frequency, magnitude, power', fmt='%.5f', delimiter=', ', comments='')
+
+    return None
+
+
+def stats(lc, pg, n_rand=1000):
+
+    '''
+    Function to export relevant data from an extracted periodogram and lightcurve.
+
+    Parameters
+    ----------
+    lc : lk.lightcurve
+        The input lightcurve object from either TESS or Kepler.
+
+    pg : lk.periodogram.LombScarglePeriodogram
+        The input periodogram object from either TESS or Kepler.
+
+    n_rand : int, optional
+        Number of points used to randomly calculate standard deviations and peak to peaks.
+
+    Returns
+    -------
+    Nothing but the summary is exported to a txt.
+    '''
+
+    if not (type(lc) == lk.lightcurve.KeplerLightCurve \
+        or  type(lc) == lk.lightcurve.TessLightCurve \
+        or  type(pg) == lk.periodogram.LombScarglePeriodogram):
+        print('Input lightcurve or periodogram is not recognised as such. Exiting...\n')
+        return None
+
+    if not hasattr(lc, 'magnitude'):
+        lc = get_mag_lc(lc)
+
+    lc_pp = []
+    for i in range(n_rand):
+        sample = np.asarray(random.sample(lc.magnitude.tolist(), int(0.75*len(lc))))
+        lc_pp.append(1000*abs(sample.min()-sample.max()))
+
+    lc_pp_sc = sigmaclip(lc_pp, low=2., high=2.)[0]
+
+    output = open(maindir+'/DATA/'+pg.targetid+'/'+lc.targetid+'_stats.txt', 'w')
+
+    output.write('# Summary %s\n' % lc.targetid)
+    output.write('# LC-Std [mmag] | LC-PP [mmag]\n')
+    output.write('%.3f %.3f\n' % (1000*lc.magnitude.std(), lc_pp_sc.mean()))
+
+    max_freq = pg.cuts_freq[pg.cut_yaxis.index(np.max(pg.cut_yaxis))]
+    if max_freq <= 1.5:
+        if any([i > 1.5 for i in pg.cuts_freq]):
+            output.write('g-MODE + p-MODE\n')
+        else:
+            output.write('g-MODE\n')
+    else:
+        if any([i <= 1.5 for i in pg.cuts_freq]):
+            output.write('p-MODE + g-MODE\n')
+        else:
+            output.write('p-MODE\n')
+
+    SLF = input('Does the periodogram show SLF [y/yes/n/no/?]: ')
+    if SLF in ['y','yes','Y']:
+        output.write('SLF: YES\n')
+    elif SLF in ['n','no','N']:
+        output.write('SLF: NO\n')
+    else:
+        output.write('SLF: %s\n' % SLF)
+
+    output.write('# PG-freq [d-1] | PG-Amp [mmag]\n')
+
+    for i,j in zip(pg.cuts_freq,pg.cut_yaxis):
+        output.write('%.3f %.3f\n' % (i,j))
+
+    output.close()
+    plt.close('all')
+
+    return None
+
+
+def recover_pg(ID, y_axis='power', dcut=0.2):
+
+    '''
+    Function to recover the data exported from the periodogram and re-do the associated plots.
+
+    Parameters
+    ----------
+    ID : str
+        The input ID for the source to search within the DATA/ folder.
+
+    y_axis : str, optional
+    Choose between 'power'/'mag' for the plot showing the periodogram. Default is 'power'.
+
+    Returns
+    -------
+    Nothing but the plot is created from the preidiogram data.
+    '''
+
+    if os.path.exists(maindir+'/DATA/'+ID+'/'+ID+'_pg.txt'):
+        freq, mag, power = np.loadtxt(maindir+'/DATA/'+ID+'/'+ID+'_pg.txt', skiprows=1, delimiter=',').T
+
+    else:
+        print('File %s could not be found under the path: %s\n' % (ID+'_pg.txt',maindir+'/DATA/'+ID+'/'))
+        return None
+
+
+    if y_axis == 'power':
+        max_val = power.max()
+    elif y_axis == 'mag':
+        max_val = mag.max()
+
+    # Analisis of the peaks:
+    change = 'y'
+    while change == 'y':
+
+        if 'fig_pg' in locals():
+            plt.close(fig_pg)
+
+        if y_axis == 'power':
+            peaks_index, properties = find_peaks(power, height=dcut*max_val)
+
+            fig_pg, ax_pg = plt.subplots(figsize=(7,3.5))
+
+            ax_pg.plot(freq, power, lw=0.5)
+            ax_pg.yaxis.set_minor_locator(AutoMinorLocator())
+            ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
+            ax_pg.set_ylabel(r'Power [$\mathrm{e^-}$/s]')
+
+            cuts_freq,cut_yaxis = [freq[i] for i in peaks_index],[power[i] for i in peaks_index]
+
+            ax_pg.scatter(cuts_freq, [i+max_val*0.02 for i in cut_yaxis], s=10, marker='v', c='orange')
+
+        elif y_axis == 'mag':
+            peaks_index, properties = find_peaks(mag, height=dcut*max_val)
+
+            fig_pg, ax_pg = plt.subplots(figsize=(7,3.5))
+
+            ax_pg.plot(freq, mag, lw=0.5)
+            ax_pg.yaxis.set_minor_locator(AutoMinorLocator())
+            ax_pg.set_xlabel(r'Freq. [d$^{-1}$]')
+            ax_pg.set_ylabel('Norm. Amplitude')
+
+            cuts_freq,cut_yaxis = [freq[i] for i in peaks_index],[power[i] for i in peaks_index]
+
+            ax_pg.scatter(cuts_freq, [i+max_val*0.02 for i in cut_yaxis], s=10, marker='v', c='orange')
+
+        ax_pg.axhline(dcut, color='r', lw=0.4, linestyle = '--', alpha=0.5)
+
+        if y_axis == 'power' and any(power[freq>15]>0.1*max_val):
+            ax_pg.set_xlim(-0.1,)
+        elif y_axis == 'mag' and any(mag[freq>15]>0.1*max_val):
+            ax_pg.set_xlim(-0.1,)
+        else:
+            ax_pg.set_xlim(-0.1,15)
+
+        ax_pg.set_ylim(-0.05,)
+
+        ax_pg_top = ax_pg.twiny()
+        ax_pg_top.xaxis.set_minor_locator(AutoMinorLocator())
+        ax_pg_top.set_xlim(ax_pg.get_xlim())
+        ax_pg_top.set_xticks(ax_pg.get_xticks()[1:-1])
+        ax_pg_top.set_xticklabels(['-']+[round(np.log10(i),1) for i in ax_pg.get_xticks()[2:-1]])
+        ax_pg_top.set_xlabel(r'log Period [d]')
+
+        # Secondary plot with zoom at lower frequencies
+        ax_pgzoom = fig_pg.add_axes([0.45, 0.37, 0.5, 0.38]) # l, b, w, h
+        ax_pgzoom.plot(freq, power, lw=.5)
+        ax_pgzoom.set_xlim(-0.1,5)
+        ax_pgzoom.set_ylim(-0.05,)
+
+        ax_pg_top = ax_pgzoom.twiny()
+        ax_pg_top.set_xlim(ax_pgzoom.get_xlim())
+        ax_pg_top.set_xticks(ax_pgzoom.get_xticks()[1:-1])
+        ax_pg_top.set_xticklabels(['-']+[round(np.log10(i),1) for i in ax_pgzoom.get_xticks()[2:-1]])
+
+        fig_pg.tight_layout()
+        fig_pg.show()
+
+        change = input('Do you want to change the dcut value? [n/y]: ')
+        if change == 'y':
+            dcut = input('Enter new dcut value (current value is %d): ' % dcut)
+            dcut = float(dcut)
+
+        elif change not in ['y','n']:
+            print('Not a valid input.')
+            change = 'y'
 
     return None
