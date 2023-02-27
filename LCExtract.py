@@ -43,7 +43,7 @@ def working_dir(maindir=None):
 maindir = working_dir()
 
 
-def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
+def query_data(ID, method='simple', mission=(), author='any', cadence=None,
     sec=None, cutout_size=None, quarter=None, campaign=None):
 
     '''
@@ -82,7 +82,6 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
 
     cutout_size : int/float/tuple, optional
         Side length of cutout in pixels. Tuples should have dimensions (y, x).
-        Default size is (5, 5).
 
     quarter : int/list of ints, optional
         Kepler Quarter. By default, all will be returned.
@@ -92,7 +91,7 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
 
     Returns
     -------
-    Lightkurve object of the queried target.
+    Lightkurve or TessTargetPixelFile of the queried target.
     '''
 
     ID = ID.strip()
@@ -111,22 +110,22 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
         method = input('Input method is not available, please type a valid one: ')
 
     if method == 'simple':
-        lc = lk.search_lightcurve(ID, mission=mission, author=author, cadence=cadence,
+        data = lk.search_lightcurve(ID, mission=mission, author=author, cadence=cadence,
             sector=sec, quarter=quarter, campaign=campaign)
 
     if method == 'tpf':
-        lc = lk.search_targetpixelfile(ID, mission=mission, author=author, cadence=cadence,
+        data = lk.search_targetpixelfile(ID, mission=mission, author=author, cadence=cadence,
             sector=sec, quarter=quarter, campaign=campaign)
 
     if method == 'tesscut':
         mission = author = 'TESS'
-        lc = lk.search_tesscut(ID, sector=sec)
+        data = lk.search_tesscut(ID, sector=sec)
 
-    if len(lc) == 0:
+    if len(data) == 0:
         print('No data-product found for this query.\n')
         return None
 
-    print(lc)
+    print(data)
 
     select = input('Please select which observation you want to download (#,:): ')
 
@@ -135,12 +134,12 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
         cutout_size = None
 
     if select == ':':
-        lc =  lc.download_all(cutout_size=cutout_size, download_dir=maindir)
+        data =  data.download_all(cutout_size=cutout_size, download_dir=maindir)
     else:
-        lc = lc[int(select)]
-        lc = lc.download(cutout_size=cutout_size, download_dir=maindir) # NOT FULLY WORKING, FIX
+        data = data[int(select)]
+        data = data.download(cutout_size=cutout_size, download_dir=maindir) # NOT FULLY WORKING, FIX
 
-    lc.targetid = ID.replace(' ','')
+    data.targetid = ID.replace(' ','')
 
     if not os.path.isdir(maindir+'/DATA/'+ID):
         os.mkdir(maindir+'/DATA/'+ID)
@@ -151,7 +150,56 @@ def query_lc(ID, method='simple', mission=(), author='any', cadence=None,
         if not os.path.isdir(maindir+'/DATA/'+ID+'/plots/'):
             os.mkdir(maindir+'/DATA/'+ID+'/plots/')
 
-    return lc
+    return data
+
+
+def fig_aperture(tpf, aperture_mask_1, aperture_mask_2, idx):
+    '''
+    Function to plot the aperture mask on the target pixel file.
+
+    Parameters
+    ----------
+    tpf : lightkurve.TessTargetPixelFile
+
+    aperture_mask_1 : array-like
+        Aperture mask to be plotted on the first subplot.
+
+    aperture_mask_2 : array-like
+        Aperture mask to be plotted on the second subplot.
+
+    idx : int
+        Index of the frame to be plotted.
+
+    Returns
+    -------
+    None, but the figure with the aperture mask 1 and 2 is plotted.
+    '''
+
+    if 'fig_ap' in locals():
+        plt.close(fig_ap)
+    
+    fig_ap, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, figsize=(10,4))
+
+    tpf[idx].plot(ax=ax1, aperture_mask=aperture_mask_1, mask_color='r')
+    tpf[idx].plot(ax=ax2, aperture_mask=aperture_mask_2, mask_color='w')
+
+    _,nrows,ncols = tpf.shape
+
+    ax1.set_yticks([tpf.row+i for i in range(nrows)])
+    ax1.set_xticks([tpf.column+i for i in range(ncols)])
+    ax1.set_yticklabels([i for i in range(nrows)])
+    ax1.set_xticklabels([i for i in range(ncols)])
+    ax2.set_yticks([tpf.row+i for i in range(nrows)])
+    ax2.set_xticks([tpf.column+i for i in range(ncols)])
+    ax2.set_yticklabels([i for i in range(nrows)])
+    ax2.set_xticklabels([i for i in range(ncols)])
+    ax1.set_title('Current mask')
+    ax2.set_title('Background mask')
+
+    fig_ap.tight_layout()
+    fig_ap.show()
+    
+    return fig_ap
 
 
 def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sat_cut=200,
@@ -218,80 +266,53 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sa
     idx = int(len(tpf)/3)
     print('Plots will display frame %i/%i' % (idx,len(tpf)))
 
-    change = 'y'
-    while change == 'y':
-
-        if 'fig_ap' in locals():
-            plt.close(fig_ap)
-
+    if np.all(~mask_new):
+        print('The mask is currently empty.')
+    else:
         print('Showing current mask...')
 
+    if method == 'threshold':
+        # Aperture mask defined by a threshold method using a sigma-above-background
+        # value, assuming the star is located in the center (should be).
+        mask_new = tpf[idx].create_threshold_mask(threshold=star_cut, reference_pixel=ref_pixel)
+        mask_sat = tpf[idx].create_threshold_mask(threshold=sat_cut, reference_pixel=ref_pixel)
+        mask_new = np.logical_and(mask_new, ~mask_sat)
+
+    # Define "sky" background mask (assuming threshold = 0.01)
+    mask_background = ~tpf[idx].create_threshold_mask(threshold=sky_cut, reference_pixel=None)
+
+    fig_ap = fig_aperture(tpf, mask_new, mask_background, idx)
+
+    change = 'y'
+    while change == 'y':
+        # the basic method changes the mask values between False and True by clicking interactively on the plot until the user hits enter
+        # the plot is updated after each click highlighting the new pixel in red if it is True 
         if method == 'basic':
-            print(*[[1 if i == True else 0 for i in j] for j in mask_new.tolist()], sep=',\n')
+            print('Click on the plot to select the mask pixels. Use backspace to remove. When you are done, hit enter.')
+            coords = plt.ginput(n=0, timeout=0, show_clicks=True, mouse_add=1, mouse_pop=2)
+            for coord in coords:
+                col = int(round(coord[0])-tpf.column)
+                row = int(round(coord[1])-tpf.row)
+                mask_new[row,col] = ~mask_new[row,col]
 
         elif method == 'threshold':
-            # Aperture mask defined by a threshold method using a sigma-above-background
-            # value, assuming the star is located in the center (should be).
-            mask_new = tpf[idx].create_threshold_mask(threshold=star_cut, reference_pixel=ref_pixel)
-            mask_sat = tpf[idx].create_threshold_mask(threshold=sat_cut, reference_pixel=ref_pixel)
-            mask_new = np.logical_and(mask_new, ~mask_sat)
+            star_cut = input('Enter new threshold value (current value is %d): ' % star_cut)
+            try:
+                star_cut = float(star_cut)
+                mask_new = tpf[idx].create_threshold_mask(threshold=star_cut, reference_pixel=ref_pixel)
+                mask_sat = tpf[idx].create_threshold_mask(threshold=sat_cut, reference_pixel=ref_pixel)
+                mask_new = np.logical_and(mask_new, ~mask_sat)
+            except:
+                print('Input threshold value is not a float or an integer.')
+                pass
 
-        # Define "sky" background mask (assuming threshold = 0.01)
-        mask_background = ~tpf[idx].create_threshold_mask(threshold=sky_cut, reference_pixel=None)
+        # update fig_ap showing the new mask
+        plt.close(fig_ap)
+        fig_ap = fig_aperture(tpf, mask_new, mask_background, idx)
 
-        fig_ap, (ax1,ax2) = plt.subplots(nrows=1, ncols=2, figsize=(10,4))
-        tpf[idx].plot(ax=ax2, aperture_mask=mask_background, mask_color='w')
-        tpf[idx].plot(ax=ax1, aperture_mask=mask_new, mask_color='r')
-
-        _,nrows,ncols = tpf.shape
-
-        ax1.set_yticks([tpf.row+i for i in range(nrows)])
-        ax1.set_xticks([tpf.column+i for i in range(ncols)])
-        ax1.set_yticklabels([i for i in range(nrows)])
-        ax1.set_xticklabels([i for i in range(ncols)])
-
-        ax2.set_yticks([tpf.row+i for i in range(nrows)])
-        ax2.set_xticks([tpf.column+i for i in range(ncols)])
-        ax2.set_yticklabels([i for i in range(nrows)])
-        ax2.set_xticklabels([i for i in range(ncols)])
-
-        ax1.set_title('Current mask')
-        ax2.set_title('Background mask')
-        fig_ap.tight_layout()
-        fig_ap.show()
-
-        change = '-'
-        while change not in ['y','n']:
-            change = input('Do you want to change the star cut? [n/y]: ')
-
-            if change == 'y':
-
-                done = False
-                while done == False:
-
-                    if method == 'basic':
-                        raw,col,val = input('From bottom left, use raw,column,0/1: ').split(',')
-                        if raw.isnumeric() and col.isnumeric() and val.isnumeric():
-                            if val == '1':
-                                val = True
-                            elif val == '0':
-                                val = False
-                            mask_new[int(raw)][int(col)] = val
-                            done = True
-                        else:
-                            done = False
-
-                    else:
-                        star_cut = input('Enter new threshold value (current value is %d): ' % star_cut)
-                        try:
-                            star_cut = float(star_cut)
-                            done = True
-                        except:
-                            print('Input threshold value is not a floar or an integer.')
-                            pass
+        change = input('Do you want to change the change the mask? [n/y]: ')
 
     fig_ap.savefig(maindir+'/DATA/'+tpf.targetid+"/plots/"+tpf.targetid+'_mask.png', dpi=300, bbox_inches='tight')
-    plt.close(fig_ap)
 
     tpf.mask_new = mask_new
     tpf.mask_background = mask_background
@@ -322,6 +343,7 @@ def contaminants(tpf, mask='pipeline', dmag=5, dist_cont=100):
 
     dist_cont : int/float, optional
         Maximum distance of the contaminant sources to be exported to a txt file.
+        Default is 100.
 
     Returns
     -------
@@ -380,7 +402,7 @@ def contaminants(tpf, mask='pipeline', dmag=5, dist_cont=100):
     s_fac = np.exp(query['phot_g_mean_mag'].min())*500
 
     for star in query:
-        ra_pix,dec_pix=tpf.wcs.world_to_pixel_values(star['ra'],star['dec'])
+        ra_pix,dec_pix = tpf.wcs.world_to_pixel_values(star['ra'],star['dec'])
 
         axg.scatter(tpf.column+ra_pix, tpf.row+dec_pix, s=s_fac/np.exp(star['phot_g_mean_mag']),
             fc='orange', ec='k', alpha=0.8, lw=.5, zorder=1)
