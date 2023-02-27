@@ -285,8 +285,6 @@ def change_aperture(tpf, ini_mask='pipeline', method='threshold', star_cut=8, sa
 
     change = 'y'
     while change == 'y':
-        # the basic method changes the mask values between False and True by clicking interactively on the plot until the user hits enter
-        # the plot is updated after each click highlighting the new pixel in red if it is True 
         if method == 'basic':
             print('Click on the plot to select the mask pixels. Use backspace to remove. When you are done, hit enter.')
             coords = plt.ginput(n=0, timeout=0, show_clicks=True, mouse_add=1, mouse_pop=2)
