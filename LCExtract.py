@@ -27,7 +27,6 @@ Gaia.ROW_LIMIT = -1 # Set the number of output raw limit to infinite
 # Lightkurve
 import lightkurve as lk
 
-
 # https://docs.lightkurve.org/
 # https://docs.lightkurve.org/tutorials/
 # https://docs.lightkurve.org/reference/api/lightkurve.KeplerTargetPixelFile.html
@@ -141,14 +140,14 @@ def query_data(ID, method='simple', mission=(), author='any', cadence=None,
 
     data.targetid = ID.replace(' ','')
 
-    if not os.path.isdir(maindir+'/DATA/'+ID):
-        os.mkdir(maindir+'/DATA/'+ID)
-        os.mkdir(maindir+'/DATA/'+ID+'/plots/')
-        print ("Directory tree created in %s " % (maindir+'/DATA/'+ID))
+    if not os.path.isdir(maindir+'/DATA/'+data.targetid):
+        os.mkdir(maindir+'/DATA/'+data.targetid)
+        os.mkdir(maindir+'/DATA/'+data.targetid+'/plots/')
+        print ("Directory tree created in %s " % (maindir+'/DATA/'+data.targetid))
 
     else:
-        if not os.path.isdir(maindir+'/DATA/'+ID+'/plots/'):
-            os.mkdir(maindir+'/DATA/'+ID+'/plots/')
+        if not os.path.isdir(maindir+'/DATA/'+data.targetid+'/plots/'):
+            os.mkdir(maindir+'/DATA/'+data.targetid+'/plots/')
 
     return data
 
