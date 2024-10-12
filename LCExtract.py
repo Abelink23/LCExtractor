@@ -605,7 +605,8 @@ def sig_clip_lc(lc, sigma=6):
             print('Not a valid input.')
             change = 'y'
 
-    lc.remove_outliers(sigma=sigma, return_mask=True)
+    #lc = lc.remove_outliers(sigma=sigma, return_mask=True)
+    lc = lc.remove_outliers(sigma=sigma)
 
     lc = lc.remove_nans()
 
@@ -900,6 +901,10 @@ def stats(lc, pg, n_rand=1000):
 
     '''
     Function to export relevant data from an extracted periodogram and lightcurve.
+
+    Note: The peak to peak is calculated by randomly measuring n_rand times the peak
+          to peak values of a random 75% part of the lightcurve, and then sigma-clipping
+          the results.
 
     Parameters
     ----------
